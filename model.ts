@@ -28,6 +28,7 @@ export function defaults() {
     end: 30,
     tolerance: 0.09,
     speedLimit: 2,
+    handSpeedLimit: 3,
     length: 0.3,
   };
 }
@@ -143,16 +144,21 @@ export function analyze(c: Config) {
   if (!c.relay) return { event, windows };
   const start = Math.max(...c.runners.map((r) => r.start)),
     finish = Math.min(...c.runners.map((r) => r.start + r.rise + r.hold));
+  const first = sample(c, 0);
+  let previous = { x: first.tip.x - first.b.hand.x, y: first.tip.y - first.b.hand.y };
   let inside = false;
   for (let i = 0; i <= duration * 120; i++) {
     const t = i / 120,
       s = sample(c, t),
+      offset = { x: s.tip.x - s.b.hand.x, y: s.tip.y - s.b.hand.y },
+      handSpeed = Math.hypot(offset.x - previous.x, offset.y - previous.y) / frame,
       ok =
         t >= start &&
         t <= finish &&
         s.tip.x >= c.zone &&
         s.tip.x <= c.end &&
         Math.abs(s.relative) <= c.speedLimit &&
+        handSpeed <= c.handSpeedLimit &&
         s.handGap <= c.tolerance;
     if (ok) {
       if (!inside) windows.push([t, t]);
@@ -165,6 +171,7 @@ export function analyze(c: Config) {
         dy: s.tip.y - s.b.hand.y,
       };
     }
+    previous = offset;
     inside = ok;
   }
   if (
@@ -208,3 +215,4 @@ export function advance(
     ? lo + ((((n - lo) % (hi - lo)) + (hi - lo)) % (hi - lo))
     : clamp(n, lo, hi);
 }
+

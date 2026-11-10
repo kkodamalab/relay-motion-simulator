@@ -53,6 +53,7 @@ const exchange: Field[] = [
   ["end", "ゾーン終了 m", -50, 100, 0.1],
   ["length", "バトン長 m", 0.1, 0.6, 0.01],
   ["tolerance", "距離許容値 m", 0.01, 0.5, 0.01],
+  ["handSpeedLimit", "先端・受け手の相対速度上限 m/s", 0, 15, 0.1],
   ["speedLimit", "走者相対速度上限 m/s", 0, 10, 0.1],
 ];
 function fields(target: HTMLElement, obj: object, items: Field[]) {
@@ -561,3 +562,4 @@ recompute();
 changeRate(1);
 window.addEventListener("resize", draw);
 requestAnimationFrame(tick);
+

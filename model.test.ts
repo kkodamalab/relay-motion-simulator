@@ -55,3 +55,9 @@ test("independent runners and capped acceleration", () => {
   expect(motion(c.runners[0], 2)).toMatchObject({ v: 4, x: 7, a: 0 });
   expect(state(c, 2, null).b).toEqual(b);
 });
+
+test("hand approach velocity gates exchange independently", () => {
+  const c = defaults();
+  c.handSpeedLimit = 0;
+  expect(analyze(c).event?.success).toBe(false);
+});
