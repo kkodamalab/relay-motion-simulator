@@ -57,8 +57,10 @@ test("seek, export and manual loop without an exchange", async ({ page }) => {
   expect(time).toBeGreaterThanOrEqual(1.2);
   expect(time).toBeLessThanOrEqual(1.4);
   await page.locator("#reset").click();
-  await page.locator("#timeline").fill("2");
-  await expect(page.locator("#clock")).toContainText("2.000");
-  await expect(page.locator("#stats")).toContainText("16.00 m");
+  await page.locator("#timeline").focus();
+  await page.keyboard.press("End");
+  await expect(page.locator("#clock")).toContainText("6.000");
+  await expect(page.locator("#stats")).toContainText("48.00 m");
   await expect(page.locator("#result")).toContainText("保持 B");
 });
+
