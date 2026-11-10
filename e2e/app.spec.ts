@@ -64,3 +64,56 @@ test("seek, export and manual loop without an exchange", async ({ page }) => {
   await expect(page.locator("#result")).toContainText("保持 B");
 });
 
+test("research plots, screenshots and identical CSV/JSON samples", async ({
+  page,
+}, info) => {
+  await page.goto("./");
+  await page.setViewportSize({ width: 1200, height: 880 });
+  const seek = async (v: number) => {
+    await page.locator("#timeline").evaluate((el: HTMLInputElement, t) => {
+      el.value = String(t);
+      el.dispatchEvent(new Event("input"));
+    }, v);
+  };
+  await page.locator("#trace00").check();
+  for (const [label, time] of [
+    ["before-contact", 0.99],
+    ["after-contact", 1.01],
+    ["receiver", 1.86],
+  ] as const) {
+    await seek(time);
+    await page
+      .locator(".stage")
+      .screenshot({ path: info.outputPath(label + ".png") });
+  }
+  await page.locator("#baton").uncheck();
+  await expect(page.locator("#result")).not.toContainText("保持");
+  await page.getByRole("button", { name: "PHASE", exact: true }).click();
+  await page.locator("#phaseScope").selectOption("2");
+  await page.locator("#phaseSource").selectOption("1");
+  for (const mode of ["0", "1", "2", "3", "4"]) {
+    await page.locator("#phaseChart").selectOption(mode);
+    await expect(page.locator("#legend")).toContainText("A左脚");
+  }
+  await page.locator("#space").selectOption({ label: "BODY RELATIVE" });
+  await page.locator("#trace01").check();
+  await page.locator("#coords").check();
+  await expect(page.locator("#coordinates")).toContainText("左手");
+  const read = async (id: string) => {
+    const ready = page.waitForEvent("download");
+    await page.locator("#" + id).click();
+    const stream = await (await ready).createReadStream();
+    const chunks = [];
+    for await (const part of stream!) chunks.push(part);
+    return Buffer.concat(chunks).toString("utf8");
+  };
+  const json = JSON.parse(await read("json")),
+    csv = (await read("csv")).trim().split(/\r?\n/),
+    keys = csv[0].replace(/^\uFEFF/, "").split(",");
+  expect(csv.length).toBe(723 - 1);
+  for (const n of [0, 120, 720]) {
+    const fields = csv[n + 1].split(",");
+    keys.forEach((k, i) => expect(fields[i]).toBe(String(json.samples[n][k])));
+  }
+  expect(keys).not.toContain("owner");
+});
