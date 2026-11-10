@@ -159,11 +159,11 @@ function recompute() {
     hi = Math.min(duration, e.t + 1);
   } else {
     input("ab").checked = false;
-    lo = 0;
-    hi = duration;
+    lo = NaN;
+    hi = NaN;
   }
-  input("lo").value = fmt(lo);
-  input("hi").value = fmt(hi);
+  input("lo").value = e ? fmt(lo) : "";
+  input("hi").value = e ? fmt(hi) : "";
   for (const b of jumpButtons) b.disabled = !e;
   const metric = el<HTMLSelectElement>("metric");
   for (let i = 4; i <= 6; i++) metric.options[i].disabled = !c.relay;
@@ -458,8 +458,7 @@ for (const id of ["lo", "hi", "ab"])
       lo = a;
       hi = b;
     } else {
-      input("lo").value = fmt(lo);
-      input("hi").value = fmt(hi);
+      input("ab").checked = false;
     }
     if (input("ab").checked) t = clamp(t, lo, hi);
     draw();
@@ -562,4 +561,5 @@ recompute();
 changeRate(1);
 window.addEventListener("resize", draw);
 requestAnimationFrame(tick);
+
 

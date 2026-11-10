@@ -42,3 +42,23 @@ for (const width of [1440, 768, 375])
       expect(errors).toEqual([]);
     },
   );
+
+test("seek, export and manual loop without an exchange", async ({ page }) => {
+  await page.goto("./");
+  await page.locator("#solo").click();
+  await expect(page.locator("#lo")).toHaveValue("");
+  await page.locator("#lo").fill("1.2");
+  await page.locator("#hi").fill("1.4");
+  await page.locator("#ab").check();
+  await page.locator("#play").click();
+  await page.waitForTimeout(400);
+  await page.locator("#play").click();
+  const time = parseFloat(await page.locator("#clock").innerText());
+  expect(time).toBeGreaterThanOrEqual(1.2);
+  expect(time).toBeLessThanOrEqual(1.4);
+  await page.locator("#reset").click();
+  await page.locator("#timeline").fill("2");
+  await expect(page.locator("#clock")).toContainText("2.000");
+  await expect(page.locator("#stats")).toContainText("16.00 m");
+  await expect(page.locator("#result")).toContainText("保持 B");
+});
