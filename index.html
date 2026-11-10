@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Relay Motion Simulator</title
+  ><link rel="stylesheet" href="./style.css" />
+  <header>
+    <span class="logo" aria-hidden="true">≋</span>
+    <h1>Relay Motion Simulator</h1>
+    <button id="reset">↺ RESET</button>
+  </header>
+  <main>
+    <nav>
+      <button id="solo">RUNNER SOLO</button
+      ><button id="relay">RELAY EXCHANGE</button>
+    </nav>
+    <section class="stage">
+      <div class="bar">
+        <h2>走行ビュー</h2>
+        <label><input id="follow" type="checkbox" checked />追従</label
+        ><label><input id="trail" type="checkbox" />軌跡</label
+        ><label><input id="bones" type="checkbox" checked />骨格</label
+        ><label><input id="joints" type="checkbox" checked />関節点</label>
+      </div>
+      <canvas id="scene" aria-label="側面走行アニメーション"></canvas>
+      <div class="bar telemetry" id="stats"></div>
+    </section>
+    <section class="transport">
+      <div class="bar">
+        <button id="play" class="primary">▶ 再生</button
+        ><button id="stop">停止</button><button id="home">最初へ</button
+        ><span id="clock"></span
+        ><label><input id="loop" type="checkbox" />ループ</label>
+      </div>
+      <div class="track">
+        <input
+          id="timeline"
+          aria-label="時刻"
+          type="range"
+          min="0"
+          max="6"
+          step="any"
+          value="0"
+        /><i id="marker"></i>
+      </div>
+      <div class="bar">
+        <b>再生速度</b><output id="rate"></output
+        ><input
+          id="speed"
+          aria-label="再生速度"
+          type="range"
+          min=".1"
+          max="3"
+          step=".1"
+          value="1"
+        />
+        <div id="presets"></div>
+      </div>
+      <div class="bar" id="steps"></div>
+      <div class="bar" id="jumps"></div>
+    </section>
+    <div class="settings">
+      <section>
+        <div class="bar">
+          <h2>走者パラメータ</h2>
+          <button id="editA">Runner A</button
+          ><button id="editB">Runner B</button>
+        </div>
+        <div id="runner"></div>
+      </section>
+      <section>
+        <h2>バトンパス設定</h2>
+        <div id="exchange"></div>
+        <p id="result"></p>
+      </section>
+    </div>
+    <section>
+      <div class="bar">
+        <h2>時系列解析</h2>
+        <select id="metric" aria-label="グラフ項目"></select
+        ><button id="json">JSON ↓</button><button id="csv">CSV ↓</button>
+      </div>
+      <canvas id="plot" aria-label="選択項目の時系列"></canvas>
+      <p id="legend"></p>
+    </section>
+    <footer>
+      2D運動学モデル ·
+      速度と四肢周期は独立。パス成功は幾何学的な成立を示します。接触力・把持力・落下は予測しません。
+    </footer>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</html>
