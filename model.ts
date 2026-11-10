@@ -5,7 +5,7 @@ export const clamp = (x: number, l: number, h: number) =>
   Math.min(h, Math.max(l, x));
 export function defaults() {
   return {
-    duration: 10,
+    duration,
     decelerate: true,
     speedLinked: true,
     preDecelerate: false,
@@ -103,6 +103,8 @@ export function brakingMotion(
     a: t < start + initial.v / a ? -a : 0,
   };
 }
+// Only absolute pre-braking enters exchange detection. Success-relative braking
+// is resolved afterward, so it cannot change its own triggering event.
 export function brakeStart(
   c: Config,
   event: Event | null,
@@ -144,6 +146,7 @@ export function pose(
     initial = start === null ? null : motion(r, start),
     ratio = initial && t > start! ? (initial.v > 0 ? m.v / initial.v : 0) : 1,
     weight = smooth(ratio),
+    // Integrate cadence analytically rather than accumulating animation frames.
     clock =
       linked && initial && t > start!
         ? start! + (m.distance - initial.distance) / Math.max(initial.v, 1e-9)
@@ -203,6 +206,7 @@ export function pose(
       dx =
         Math.sign(dx) *
         (core + margin * Math.tanh((Math.abs(dx) - core) / margin));
+    // Fade continuously into a grounded upright pose, even with independent cadence.
     dx *= weight;
     lift *= weight;
     foot = 90 + (foot - 90) * weight;

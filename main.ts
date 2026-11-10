@@ -377,7 +377,7 @@ function scene(s: Snapshot) {
     g.fillStyle = "#dcebcf";
     g.fillRect(X(c.zone), ground, X(c.end) - X(c.zone), 10);
   }
-  const step = scale < 18 ? 5 : 1;
+  const step = scale < 45 ? 5 : 1;
   for (
     let x = Math.ceil((center - w / 2 / scale) / step) * step;
     X(x) < w;
@@ -804,7 +804,9 @@ function draw() {
     "　" +
     rs
       .map((r, i) => {
-        const period = r.pitch > 0 ? 2 / r.pitch : Infinity;
+        if (r.pitch === 0)
+          return "AB"[i] + " 両足接地 · 停止（ピッチ 0.000 歩/s）";
+        const period = 2 / r.pitch;
         return (
           "AB"[i] +
           " " +
