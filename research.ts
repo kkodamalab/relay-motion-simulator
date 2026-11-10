@@ -4,12 +4,13 @@ import {
   type Event,
   runner,
   pose,
+  configuredPose,
+  analyze,
+  braking,
   state,
   delta,
   wrap,
   rad,
-  duty,
-  duration,
   frame,
 } from "./model";
 export const names = ["左脚", "右脚", "左腕", "右腕"];
@@ -42,27 +43,42 @@ export function trail(p: Point, hip: Point, origin: Point, relative: boolean) {
 }
 export function contacts(c: Config) {
   const result: { runner: number; side: number; t: number; on: boolean }[] = [];
+  const event = analyze(c).event;
   for (let i = 0; i < (c.relay ? 2 : 1); i++) {
-    const r = runner(c, i),
-      hz = r.pitch / 2;
-    for (const side of [0, 1])
-      for (const on of [true, false]) {
-        const offset = (r.initial + side * r.legs) / 360 - (on ? 0 : duty);
-        for (let n = Math.ceil(offset); (n - offset) / hz <= duration; n++)
-          result.push({ runner: i, side, t: (n - offset) / hz, on });
-      }
+    let previous = configuredPose(c, 0, i, event);
+    previous.limbs.forEach((l, side) => {
+      if (l.legPhase === 0) result.push({ runner: i, side, t: 0, on: true });
+    });
+    for (let n = 1; n <= c.duration * 120; n++) {
+      const t = n / 120,
+        next = configuredPose(c, t, i, event);
+      for (const side of [0, 1])
+        if (previous.limbs[side].contact !== next.limbs[side].contact) {
+          let lo = t - frame,
+            hi = t;
+          for (let k = 0; k < 30; k++) {
+            const mid = (lo + hi) / 2;
+            if (
+              configuredPose(c, mid, i, event).limbs[side].contact ===
+              previous.limbs[side].contact
+            )
+              lo = mid;
+            else hi = mid;
+          }
+          result.push({ runner: i, side, t: hi, on: next.limbs[side].contact });
+        }
+      previous = next;
+    }
   }
   return result.sort((a, b) => a.t - b.t);
 }
 export function observed(c: Config, t: number, i: number) {
-  const r = runner(c, i),
-    active = c.relay && c.baton,
-    s = pose(r, t, i, active),
+  const s = configuredPose(c, t, i),
     dt = 0.0001;
   const lo = Math.max(0, t - dt),
     hi = t + dt,
-    left = pose(r, lo, i, active),
-    right = pose(r, hi, i, active);
+    left = configuredPose(c, lo, i),
+    right = configuredPose(c, hi, i);
   const speeds = s.limbs.map((l, j) =>
     l.angles.map(
       (_, k) =>
@@ -85,7 +101,7 @@ export function observed(c: Config, t: number, i: number) {
 export function centers(c: Config) {
   return [0, 1].map((i) => {
     const rows = Array.from(
-      { length: 361 },
+      { length: Math.round(c.duration * 60) + 1 },
       (_, j) => observed(c, j / 60, i).angles,
     );
     return names.map((_, k) => {
@@ -108,10 +124,13 @@ export function observation(c: Config, t: number, i: number, center: number[]) {
 export function exportRows(c: Config, event: Event | null) {
   const center = centers(c),
     events = contacts(c);
-  return Array.from({ length: 721 }, (_, n) => {
+  return Array.from({ length: Math.round(c.duration * 120) + 1 }, (_, n) => {
     const t = n * frame,
       s = state(c, t, event),
       row: Record<string, string | boolean | number> = {
+        deceleration_start_s: braking(c, event).start ?? "",
+        stop_s: braking(c, event).stop ?? "",
+        post_pass_stop_distance_m: braking(c, event).distance ?? "",
         time_s: t,
         model: "2.0",
         coordinates: "world_m_right_up",
@@ -127,8 +146,7 @@ export function exportRows(c: Config, event: Event | null) {
     for (let i = 0; i < (c.relay ? 2 : 1); i++) {
       const key = "AB"[i] + "_",
         r = i ? s.b : s.a,
-        o = obs[i],
-        eff = runner(c, i);
+        o = obs[i];
       for (const [k, v] of Object.entries(c.runners[i]))
         row[key + "config_" + k] = v;
       Object.assign(row, {
@@ -137,7 +155,8 @@ export function exportRows(c: Config, event: Event | null) {
         [key + "a_m_s2"]: r.a,
         [key + "distance_m"]: r.distance,
         [key + "pelvis_vy_m_s"]: r.vy,
-        [key + "stride_period_s"]: 2 / eff.pitch,
+        [key + "stride_period_s"]: r.pitch > 0 ? 2 / r.pitch : "",
+        [key + "pitch_steps_s"]: r.pitch,
       });
       points(r).forEach((p, j) => {
         const k =

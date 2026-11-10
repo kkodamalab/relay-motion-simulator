@@ -10,14 +10,13 @@ import {
   observation,
   exportRows,
 } from "./research";
-import { runner, duty, delta } from "./model";
+import { runner, duty, delta, braking } from "./model";
 import {
   defaults,
   analyze,
   state,
   advance,
   clamp,
-  duration,
   frame,
   type Point,
 } from "./model";
@@ -151,6 +150,40 @@ function settings() {
     fields(box, c, [["offset", "左脚の固定位相差 B−A °", 0, 360, 1]]);
     box.append("同期はモデル上の拘束条件です。");
   }
+  const stopBox = document.createElement("div");
+  const stopControls = (target: HTMLElement) => {
+    toggle(target, "渡し手の減速・停止", c, "decelerate");
+    toggle(target, "走行速度と四肢運動周期を連動", c, "speedLinked");
+    fields(target, c, [["deceleration", "減速度 m/s²", 0.5, 8, 0.1]]);
+    if (c.relay && c.baton) {
+      fields(target, c, [["delay", "パス成功から減速まで s", 0, 20, 0.05]]);
+      toggle(target, "パス前から減速（絶対時刻を使用）", c, "preDecelerate");
+      if (c.preDecelerate)
+        fields(target, c, [["preStart", "パス前減速開始 s", 0, 20, 0.05]]);
+      const select = document.createElement("select");
+      select.ariaLabel = "パス失敗時の動作";
+      select.add(new Option("失敗時：走行継続", "0"));
+      select.add(new Option("失敗時：指定時刻から減速", "1"));
+      select.value = c.failureStop ? "1" : "0";
+      select.onchange = () => {
+        c.failureStop = select.value === "1";
+        settings();
+        recompute();
+      };
+      target.append(select);
+    } else toggle(target, "バトンOFF・単独走行でも減速", c, "freeStop");
+    fields(target, c, [
+      ["failureStart", "失敗時・バトンOFFの減速開始 s", 0, 20, 0.05],
+    ]);
+    const note = document.createElement("p");
+    note.textContent =
+      "パス前減速は絶対時刻から判定に反映。パス後減速は確定した成功時刻を基準に計算。";
+    target.append(note);
+  };
+  if (settingTab === 0 && editor === 0) {
+    box.append(stopBox);
+    stopControls(stopBox);
+  }
   const active = c.relay && c.baton;
   el("exchangePanel").hidden = settingTab !== 3 || !active;
   box.parentElement!.hidden = settingTab === 3;
@@ -165,6 +198,7 @@ function settings() {
   const ex = el("exchange");
   ex.replaceChildren();
   if (active) {
+    stopControls(ex);
     fields(ex, c, exchange);
     c.runners.forEach((r, i) => {
       const d = document.createElement("details");
@@ -231,12 +265,14 @@ const metrics = [
   "骨盤鉛直速度 m/s",
   "走行周期差 B−A s",
   "相対位置 B−A m",
+  "ピッチ 歩/s",
 ];
 el("metric").innerHTML = metrics
   .map((m, i) => '<option value="' + i + '">' + m + "</option>")
   .join("");
 type Snapshot = ReturnType<typeof state>;
 function values(s: Snapshot, k: number) {
+  if (k === 21) return (c.relay ? [s.a, s.b] : [s.a]).map((r) => r.pitch);
   if (k === 19) return [2 / runner(c, 1).pitch - 2 / runner(c, 0).pitch];
   if (k === 20) return [s.gap];
   if (k === 17 || k === 18)
@@ -256,22 +292,27 @@ let center: number[][] = [],
   observations: ReturnType<typeof observation>[][] = [];
 let samples: Snapshot[] = [],
   lo = 0,
-  hi = duration;
+  hi = c.duration;
 function recompute() {
+  t = clamp(t, 0, c.duration);
+  input("timeline").max = String(c.duration);
+  for (const id of ["lo", "hi"]) input(id).max = String(c.duration);
+  el<HTMLSelectElement>("length").options[3].value = String(c.duration);
   analysis = analyze(c);
   center = centers(c);
   events = contacts(c);
-  observations = Array.from({ length: 361 }, (_, j) =>
-    [0, 1].map((i) => observation(c, j / 60, i, center[i])),
+  observations = Array.from(
+    { length: Math.round(c.duration * 60) + 1 },
+    (_, j) => [0, 1].map((i) => observation(c, j / 60, i, center[i])),
   );
   configureAnalysis();
-  samples = Array.from({ length: 361 }, (_, i) =>
+  samples = Array.from({ length: Math.round(c.duration * 60) + 1 }, (_, i) =>
     state(c, i / 60, analysis.event),
   );
   const e = analysis.event;
   if (e) {
     lo = Math.max(0, e.t - 1);
-    hi = Math.min(duration, e.t + 1);
+    hi = Math.min(c.duration, e.t + 1);
   } else {
     input("ab").checked = false;
     lo = NaN;
@@ -443,6 +484,18 @@ function marks(
     g.fillStyle = e.side ? "#c14788" : "#007f77";
     g.fillRect(X(e.t), h - 32 - e.runner * 5, 2, 5);
   }
+  const brake = braking(c, analysis.event);
+  for (const [time, color] of [
+    [brake.start, "#ab4b90"],
+    [brake.stop, "#226b50"],
+  ] as const) {
+    if (time === null || time > c.duration) continue;
+    g.strokeStyle = color;
+    g.beginPath();
+    g.moveTo(X(time), 10);
+    g.lineTo(X(time), h - 25);
+    g.stroke();
+  }
   if (analysis.event?.success) {
     g.strokeStyle = "#ba8711";
     g.setLineDash([3, 3]);
@@ -525,7 +578,7 @@ function configureAnalysis() {
     pair.dataset.mode = key;
   }
   el("definition").textContent =
-    "接地印：左＝緑、右＝紫（上段 B・下段 A）。接地は運動学的に規定。黄破線＝パス成立。" +
+    "接地印：左＝緑、右＝紫（上段 B・下段 A）。接地は運動学的に規定。黄破線＝パス成立、紫線＝減速開始、緑線＝停止。" +
     (analysisTab === 1
       ? " 脚位相は接地から次の同脚接地まで0–360°。腕は独立または脚に固定した振動子。差は後者−前者、正は後者の進み（−180°以上180°未満）。波形位相は股・肩角の試技内中点と角速度から推定し、非正弦波では設定位相と異なります。"
       : "");
@@ -558,7 +611,7 @@ function phaseGraph() {
     xs = rows.map((r) => r[0]),
     ys = rows.flatMap((r) => r.slice(1)).filter(Number.isFinite);
   const xmin = mode < 3 ? 0 : Math.min(...xs),
-    xmax = mode < 3 ? duration : Math.max(...xs),
+    xmax = mode < 3 ? c.duration : Math.max(...xs),
     min = mode === 1 ? 0 : mode === 2 ? -180 : ys.length ? Math.min(...ys) : 0,
     max = mode === 1 ? 360 : mode === 2 ? 180 : ys.length ? Math.max(...ys) : 1;
   const X = (x: number) =>
@@ -637,7 +690,7 @@ function graph() {
     min = Math.min(...all),
     max = Math.max(...all),
     span = Math.max(0.01, max - min),
-    X = (v: number) => 48 + ((w - 62) * v) / duration,
+    X = (v: number) => 48 + ((w - 62) * v) / c.duration,
     Y = (v: number) => h - 27 - ((h - 50) * (v - min)) / span;
   for (let i = 0; i < 4; i++) {
     const v = min + (span * i) / 3,
@@ -666,7 +719,7 @@ function graph() {
   g.moveTo(X(t), 8);
   g.lineTo(X(t), h - 24);
   g.stroke();
-  for (let i = 0; i <= duration; i++) {
+  for (let i = 0; i <= c.duration; i++) {
     g.fillText(i + "s", X(i) - 5, h - 6);
   }
   el("legend").textContent =
@@ -681,7 +734,7 @@ function draw() {
     e = analysis.event;
   scene(s);
   graph();
-  el("clock").textContent = fmt(t) + " / 6.000 s";
+  el("clock").textContent = fmt(t) + " / " + fmt(c.duration) + " s";
   input("timeline").value = String(t);
   el("rate").textContent = effectiveRate() + "×";
   el("play").textContent = playing ? "Ⅱ 一時停止" : "▶ 再生";
@@ -720,12 +773,38 @@ function draw() {
   if (c.relay && !c.baton)
     el("result").textContent =
       "相対位置 B−A " + fmt(s.gap) + " m　相対速度 " + fmt(s.relative) + " m/s";
+  const brake = braking(c, e);
+  el("brakeStats").textContent =
+    "Runner A　減速開始 " +
+    (brake.start === null ? "なし" : fmt(brake.start) + " s") +
+    "　停止 " +
+    (brake.stop === null
+      ? "なし"
+      : fmt(brake.stop) +
+        " s" +
+        (brake.stop > c.duration ? "（試技時間外）" : "")) +
+    "　パス後の停止距離 " +
+    (brake.distance === null ? "—" : fmt(brake.distance) + " m") +
+    "　ピッチ " +
+    fmt(s.a.pitch) +
+    " 歩/s";
+  for (const [id, time] of [
+    ["brakeMarker", brake.start],
+    ["stopMarker", brake.stop],
+  ] as const) {
+    el(id).hidden = time === null || time > c.duration;
+    if (time !== null) {
+      el(id).style.left = (time / c.duration) * 100 + "%";
+      el(id).title =
+        (id === "brakeMarker" ? "減速開始 " : "停止 ") + fmt(time) + " s";
+    }
+  }
   const rs = c.relay ? [s.a, s.b] : [s.a];
   el("stats").textContent +=
     "　" +
     rs
       .map((r, i) => {
-        const period = 2 / runner(c, i).pitch;
+        const period = r.pitch > 0 ? 2 / r.pitch : Infinity;
         return (
           "AB"[i] +
           " " +
@@ -780,13 +859,13 @@ function draw() {
   }
   el("marker").hidden = !e;
   if (e) {
-    el("marker").style.left = (e.t / duration) * 100 + "%";
+    el("marker").style.left = (e.t / c.duration) * 100 + "%";
     el("marker").title = (e.success ? "成功" : "失敗") + " " + fmt(e.t) + " s";
   }
 }
 function seek(v: number) {
   playing = false;
-  t = clamp(v, 0, duration);
+  t = clamp(v, 0, c.duration);
   draw();
 }
 function effectiveRate() {
@@ -808,10 +887,10 @@ function tick(now: number) {
       effectiveRate(),
       true,
       ab ? lo : 0,
-      ab ? hi : duration,
+      ab ? hi : c.duration,
       loop,
     );
-    if (!loop && t >= duration) playing = false;
+    if (!loop && t >= c.duration) playing = false;
     draw();
   }
   last = now;
@@ -820,7 +899,7 @@ function tick(now: number) {
 el("play").onclick = () => {
   if (!playing) {
     if (input("ab").checked && (t < lo || t >= hi)) t = lo;
-    else if (t >= duration) t = 0;
+    else if (t >= c.duration) t = 0;
     last = performance.now();
   }
   playing = !playing;
@@ -838,7 +917,7 @@ function changeRate(v: number) {
       effectiveRate(),
       true,
       ab ? lo : 0,
-      ab ? hi : duration,
+      ab ? hi : c.duration,
       ab || input("loop").checked,
     );
     last = now;
@@ -872,7 +951,7 @@ for (const id of ["lo", "hi", "ab"])
   input(id).onchange = () => {
     const a = input("lo").valueAsNumber,
       b = input("hi").valueAsNumber;
-    if (a >= 0 && b <= duration && a < b) {
+    if (a >= 0 && b <= c.duration && a < b) {
       lo = a;
       hi = b;
     } else {
@@ -914,6 +993,10 @@ el("reset").onclick = () => {
   playing = false;
   t = 0;
   c = defaults();
+  el("trialSettings").replaceChildren();
+  fields(el("trialSettings"), c, [
+    ["duration", "シミュレーション時間 s", 3, 20, 0.5],
+  ]);
   settingTab = analysisTab = 0;
   for (const n of el("trails").querySelectorAll("input")) n.checked = false;
   el<HTMLSelectElement>("space").selectedIndex = 0;
@@ -959,6 +1042,9 @@ function download(json: boolean) {
 }
 el("json").onclick = () => download(true);
 el("csv").onclick = () => download(false);
+fields(el("trialSettings"), c, [
+  ["duration", "シミュレーション時間 s", 3, 20, 0.5],
+]);
 settings();
 recompute();
 changeRate(1);

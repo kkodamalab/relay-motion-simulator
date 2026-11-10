@@ -1,10 +1,20 @@
-export const duration = 6,
+export const duration = 10,
   frame = 1 / 120,
   rad = Math.PI / 180;
 export const clamp = (x: number, l: number, h: number) =>
   Math.min(h, Math.max(l, x));
 export function defaults() {
   return {
+    duration: 10,
+    decelerate: true,
+    speedLinked: true,
+    preDecelerate: false,
+    preStart: 1,
+    delay: 0,
+    deceleration: 3,
+    failureStop: false,
+    failureStart: 4,
+    freeStop: false,
     relay: true,
     baton: true,
     sync: false,
@@ -75,26 +85,105 @@ export function runner(c: Config, i: number) {
     initial: c.lock ? c.runners[0].initial + c.offset : r.initial,
   };
 }
-export function pose(r: Runner, t: number, role: number, exchange: boolean) {
-  const m = motion(r, t),
+export function brakingMotion(
+  r: Runner,
+  t: number,
+  start: number | null,
+  deceleration: number,
+) {
+  if (start === null || t <= start) return motion(r, t);
+  const initial = motion(r, start),
+    a = clamp(deceleration, 0.5, 8),
+    u = Math.min(t - start, initial.v / a),
+    distance = initial.distance + initial.v * u - (a * u * u) / 2;
+  return {
+    x: r.x + distance,
+    distance,
+    v: t >= start + initial.v / a ? 0 : Math.max(0, initial.v - a * u),
+    a: t < start + initial.v / a ? -a : 0,
+  };
+}
+export function brakeStart(
+  c: Config,
+  event: Event | null,
+  prospective = false,
+) {
+  if (!c.decelerate) return null;
+  if (!(c.relay && c.baton)) return c.freeStop ? c.failureStart : null;
+  if (c.preDecelerate) return c.preStart;
+  if (prospective) return null;
+  if (event?.success) return event.t + c.delay;
+  return c.failureStop && event && !event.success
+    ? Math.max(event.t, c.failureStart)
+    : null;
+}
+export function braking(c: Config, event: Event | null) {
+  const start = brakeStart(c, event),
+    r = c.runners[0];
+  if (start === null) return { start, stop: null, distance: null };
+  const stop = start + motion(r, start).v / clamp(c.deceleration, 0.5, 8);
+  return {
+    start,
+    stop,
+    distance: event?.success
+      ? brakingMotion(r, stop, start, c.deceleration).x -
+        brakingMotion(r, event.t, start, c.deceleration).x
+      : null,
+  };
+}
+export function pose(
+  r: Runner,
+  t: number,
+  role: number,
+  exchange: boolean,
+  start: number | null = null,
+  deceleration = 3,
+  linked = true,
+) {
+  const m = brakingMotion(r, t, start, deceleration),
+    initial = start === null ? null : motion(r, start),
+    ratio = initial && t > start! ? (initial.v > 0 ? m.v / initial.v : 0) : 1,
+    weight = smooth(ratio),
+    clock =
+      linked && initial && t > start!
+        ? start! + (m.distance - initial.distance) / Math.max(initial.v, 1e-9)
+        : t,
     hz = r.pitch / 2,
-    phase = t * hz * 360 + r.initial,
+    phase = clock * hz * 360 + r.initial,
     armHz = r.armLock ? hz : r.armHz;
   const vertical = (phase / 360 - duty / 2) * 4 * Math.PI;
-  const hip = { x: m.x, y: 0.765 - r.bounce * Math.cos(vertical) },
-    vy = r.bounce * 4 * Math.PI * hz * Math.sin(vertical);
-  const shoulder = { x: m.x + 0.09, y: hip.y + 0.5 };
+  const hip = {
+      x: m.x,
+      y: 0.895 + weight * (0.765 - 0.895 - r.bounce * Math.cos(vertical)),
+    },
+    weightRate =
+      initial && t > start! && ratio > 0 && ratio < 1
+        ? (-6 * ratio * (1 - ratio) * clamp(deceleration, 0.5, 8)) / initial.v
+        : 0,
+    vy =
+      weightRate * (0.765 - 0.895 - r.bounce * Math.cos(vertical)) +
+      weight *
+        r.bounce *
+        4 *
+        Math.PI *
+        hz *
+        (linked ? ratio : 1) *
+        Math.sin(vertical);
+  const shoulder = { x: m.x + 0.09 * weight, y: hip.y + 0.5 };
   const reach = exchange
     ? smooth((t - r.start) / r.rise) *
       (1 - smooth((t - r.start - r.rise - r.hold) / r.rise))
     : 0;
   const limbs = [0, 1].map((side) => {
     const legPhase = wrap(phase + side * r.legs),
-      armPhase = wrap(t * armHz * 360 + r.initial + r.arms + side * r.armSides);
+      armPhase = wrap(
+        clock * armHz * 360 + r.initial + r.arms + side * r.armSides,
+      );
     const u = legPhase / 360,
       contact = u < duty;
     const mid = t + (duty / 2 - u) / hz;
-    const stanceOffset = (time: number) => motion(r, Math.max(0, time)).x - m.x;
+    const stanceOffset = (time: number) =>
+      motion(r, Math.max(0, time)).x - motion(r, t).x;
     const span = 0.015 + 0.36 * Math.sin(r.hip * rad);
     let dx = stanceOffset(mid),
       lift = 0,
@@ -114,16 +203,20 @@ export function pose(r: Runner, t: number, role: number, exchange: boolean) {
       dx =
         Math.sign(dx) *
         (core + margin * Math.tanh((Math.abs(dx) - core) / margin));
+    dx *= weight;
+    lift *= weight;
+    foot = 90 + (foot - 90) * weight;
     const ankle = { x: hip.x + dx, y: lift },
       down = hip.y - lift;
     const bend =
       (2 * Math.acos(clamp(Math.hypot(dx, down) / 0.9, -1, 1))) / rad;
     const thigh = Math.atan2(dx, down) / rad + bend / 2,
       knee = end(hip, 0.45, thigh);
-    const mix = side === role ? reach : 0,
+    const mix = side === role ? reach * weight : 0,
       arm =
-        r.shoulder * Math.sin(armPhase * rad) * (1 - mix) + r.extension * mix;
-    const elbowAngle = r.elbow * (1 - mix) + 10 * mix,
+        weight * r.shoulder * Math.sin(armPhase * rad) * (1 - mix) +
+        r.extension * mix;
+    const elbowAngle = weight * r.elbow * (1 - mix) + 10 * mix,
       elbow = end(shoulder, 0.29, arm),
       hand = end(elbow, 0.27, arm + elbowAngle);
     return {
@@ -132,7 +225,7 @@ export function pose(r: Runner, t: number, role: number, exchange: boolean) {
       toe: end(ankle, 0.19, foot),
       elbow,
       hand,
-      contact,
+      contact: weight === 0 || contact,
       legPhase,
       armPhase,
       angles: [arm, elbowAngle, thigh, bend, foot - (thigh - bend)],
@@ -140,17 +233,46 @@ export function pose(r: Runner, t: number, role: number, exchange: boolean) {
   });
   return {
     ...m,
+    pitch: r.pitch * (linked ? ratio : 1),
     hip,
     vy,
     shoulder,
-    head: { x: shoulder.x + 0.045, y: shoulder.y + 0.2 },
+    head: { x: shoulder.x + 0.045 * weight, y: shoulder.y + 0.2 },
     limbs,
     hand: limbs[role].hand,
   };
 }
-export function sample(c: Config, t: number) {
+export function configuredPose(
+  c: Config,
+  t: number,
+  i: number,
+  event: Event | null = analyze(c).event,
+) {
+  return pose(
+    runner(c, i),
+    t,
+    i,
+    c.relay && c.baton,
+    i === 0 ? brakeStart(c, event) : null,
+    c.deceleration,
+    c.speedLinked,
+  );
+}
+export function sample(
+  c: Config,
+  t: number,
+  start: number | null = brakeStart(c, null, true),
+) {
   const [a, b] = [0, 1].map((i) =>
-    pose(runner(c, i), t, i, c.relay && c.baton),
+    pose(
+      runner(c, i),
+      t,
+      i,
+      c.relay && c.baton,
+      i === 0 ? start : null,
+      c.deceleration,
+      c.speedLinked,
+    ),
   );
   const dx = b.hand.x - a.hand.x,
     dy = b.hand.y - a.hand.y;
@@ -185,7 +307,17 @@ export type Event = {
   grip: number;
   approach: number;
 };
+let analysisKey = "";
+let analysisResult: ReturnType<typeof analyzeRaw>;
 export function analyze(c: Config) {
+  const key = JSON.stringify(c);
+  if (key !== analysisKey) {
+    analysisResult = analyzeRaw(c);
+    analysisKey = key;
+  }
+  return analysisResult;
+}
+function analyzeRaw(c: Config) {
   let event: Event | null = null;
   const windows: number[][] = [];
   if (!c.relay || !c.baton) return { event, windows };
@@ -197,7 +329,7 @@ export function analyze(c: Config) {
     y: first.tip.y - first.b.hand.y,
   };
   let inside = false;
-  for (let i = 0; i <= duration * 120; i++) {
+  for (let i = 0; i <= c.duration * 120; i++) {
     const t = i / 120,
       s = sample(c, t),
       offset = { x: s.tip.x - s.b.hand.x, y: s.tip.y - s.b.hand.y },
@@ -237,8 +369,8 @@ export function analyze(c: Config) {
   if (
     !event &&
     finish >= 0 &&
-    finish <= duration &&
-    c.runners.every((r) => r.start <= duration)
+    finish <= c.duration &&
+    c.runners.every((r) => r.start <= c.duration)
   ) {
     const t = Math.max(0, finish);
     event = {
@@ -255,7 +387,7 @@ export function analyze(c: Config) {
   return { event, windows };
 }
 export function state(c: Config, t: number, event: Event | null) {
-  const s = sample(c, t),
+  const s = sample(c, t, brakeStart(c, event)),
     passed = !!event && event.success && t >= event.t;
   let { base, tip, angle } = s;
   if (passed && event) {

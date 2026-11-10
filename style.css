@@ -227,3 +227,16 @@ p {
 #coordinates:empty {
   display: none;
 }
+
+#brakeMarker,
+#stopMarker {
+  position: absolute;
+  top: 0;
+  height: 22px;
+  width: 2px;
+  background: #ab4b90;
+  pointer-events: none;
+}
+#stopMarker {
+  background: #226b50;
+}
