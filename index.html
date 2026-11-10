@@ -13,17 +13,36 @@
   <main>
     <nav>
       <button id="solo">RUNNER SOLO</button
-      ><button id="relay">RELAY EXCHANGE</button>
+      ><button id="relay">TWO RUNNERS</button>
+      <label id="batonLabel"
+        ><input id="baton" type="checkbox" checked /> BATON EXCHANGE ·
+        バトンを使用</label
+      >
     </nav>
     <section class="stage">
       <div class="bar">
         <h2>走行ビュー</h2>
         <label><input id="follow" type="checkbox" checked />追従</label
-        ><label><input id="trail" type="checkbox" />軌跡</label
+        ><label><input id="coords" type="checkbox" />先端座標</label
         ><label><input id="bones" type="checkbox" checked />骨格</label
         ><label><input id="joints" type="checkbox" checked />関節点</label>
       </div>
       <canvas id="scene" aria-label="側面走行アニメーション"></canvas>
+      <details open>
+        <summary>軌跡表示</summary>
+        <div id="trails"></div>
+        <select id="space" aria-label="軌跡座標系">
+          <option>WORLD</option>
+          <option>BODY RELATIVE</option>
+        </select>
+        <select id="length" aria-label="軌跡長">
+          <option value=".5">0.5 秒</option>
+          <option value="1">1 秒</option>
+          <option value="3">3 秒</option>
+          <option value="6">全区間</option>
+        </select>
+      </details>
+      <p id="coordinates"></p>
       <div class="bar telemetry" id="stats"></div>
     </section>
     <section class="transport">
@@ -60,6 +79,8 @@
       <div class="bar" id="steps"></div>
       <div class="bar" id="jumps"></div>
     </section>
+    <p id="result"></p>
+    <nav id="settingsTabs"></nav>
     <div class="settings">
       <section>
         <div class="bar">
@@ -69,18 +90,20 @@
         </div>
         <div id="runner"></div>
       </section>
-      <section>
+      <section id="exchangePanel">
         <h2>バトンパス設定</h2>
         <div id="exchange"></div>
-        <p id="result"></p>
       </section>
     </div>
     <section>
       <div class="bar">
         <h2>時系列解析</h2>
+        <nav id="analysisTabs"></nav>
         <select id="metric" aria-label="グラフ項目"></select
         ><button id="json">JSON ↓</button><button id="csv">CSV ↓</button>
       </div>
+      <div id="phaseControls" class="bar"></div>
+      <p id="definition"></p>
       <canvas id="plot" aria-label="選択項目の時系列"></canvas>
       <p id="legend"></p>
     </section>

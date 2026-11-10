@@ -6,6 +6,10 @@ export const clamp = (x: number, l: number, h: number) =>
 export function defaults() {
   return {
     relay: true,
+    baton: true,
+    sync: false,
+    lock: false,
+    offset: 0,
     runners: [0, 1].map((i) => ({
       x: i ? 3 : 0,
       v: i ? 7 : 8,
@@ -13,6 +17,11 @@ export function defaults() {
       accelerated: false,
       cap: 12,
       pitch: 4,
+      bounce: 0.032,
+      initial: 0,
+      armLock: true,
+      armHz: 2,
+      armSides: 180,
       hip: 48,
       knee: 105,
       shoulder: 38,
@@ -50,69 +59,89 @@ function end(p: Point, length: number, angle: number) {
     y: p.y - length * Math.cos(angle * rad),
   };
 }
-export function pose(r: Runner, t: number, role: number, relay: boolean) {
-  const m = motion(r, t),
-    phase = t * r.pitch * Math.PI,
-    hip = { x: m.x, y: 0.93 + 0.045 * Math.cos(2 * phase) },
-    shoulder = { x: m.x + 0.09, y: hip.y + 0.5 };
-  const smooth = (v: number) => {
-    const s = clamp(v, 0, 1);
-    return s * s * (3 - 2 * s);
+export const wrap = (v: number) => ((v % 360) + 360) % 360;
+export const delta = (a: number, b: number) => wrap(b - a + 180) - 180;
+export const duty = 0.3;
+export const smooth = (x: number) => {
+  const u = clamp(x, 0, 1);
+  return u * u * (3 - 2 * u);
+};
+export function runner(c: Config, i: number) {
+  const r = c.runners[i];
+  if (!i || !c.relay) return r;
+  return {
+    ...r,
+    pitch: c.sync || c.lock ? c.runners[0].pitch : r.pitch,
+    initial: c.lock ? c.runners[0].initial + c.offset : r.initial,
   };
-  const reach = relay
+}
+export function pose(r: Runner, t: number, role: number, exchange: boolean) {
+  const m = motion(r, t),
+    hz = r.pitch / 2,
+    phase = t * hz * 360 + r.initial,
+    armHz = r.armLock ? hz : r.armHz;
+  const vertical = (phase / 360 - duty / 2) * 4 * Math.PI;
+  const hip = { x: m.x, y: 0.765 - r.bounce * Math.cos(vertical) },
+    vy = r.bounce * 4 * Math.PI * hz * Math.sin(vertical);
+  const shoulder = { x: m.x + 0.09, y: hip.y + 0.5 };
+  const reach = exchange
     ? smooth((t - r.start) / r.rise) *
       (1 - smooth((t - r.start - r.rise - r.hold) / r.rise))
     : 0;
   const limbs = [0, 1].map((side) => {
-    const p = phase + side * r.legs * rad,
-      swing = Math.sin(p),
-      bend = r.knee * (0.13 + 0.87 * ((1 + Math.cos(p)) / 2) ** 1.5);
-    let thigh = r.hip * swing;
-    // During stance, aim the ankle at its mid-stance world coordinate.
-    // Invert the horizontal component of the two-link leg with prescribed knee flexion.
-    const stancePhase = Math.atan2(
-      Math.sin(p - Math.PI),
-      Math.cos(p - Math.PI),
-    );
-    const weight = Math.max(0, 1 - (Math.abs(stancePhase) / 0.82) ** 4);
-    if (weight > 0) {
-      const middle = t - stancePhase / (r.pitch * Math.PI);
-      const offset = motion(r, Math.max(0, middle)).x - m.x;
-      const reach = 0.9 * Math.cos((bend * rad) / 2);
-      const planted =
-        bend / 2 + Math.asin(clamp(offset / reach, -0.98, 0.98)) / rad;
-      thigh += (clamp(planted, -r.hip, r.hip) - thigh) * weight;
+    const legPhase = wrap(phase + side * r.legs),
+      armPhase = wrap(t * armHz * 360 + r.initial + r.arms + side * r.armSides);
+    const u = legPhase / 360,
+      contact = u < duty;
+    const mid = t + (duty / 2 - u) / hz;
+    const stanceOffset = (time: number) => motion(r, Math.max(0, time)).x - m.x;
+    const span = 0.015 + 0.36 * Math.sin(r.hip * rad);
+    let dx = stanceOffset(mid),
+      lift = 0,
+      foot = 90;
+    if (!contact) {
+      const z = (u - duty) / (1 - duty),
+        s = smooth(z);
+      dx = (1 - s) * stanceOffset(mid) + s * stanceOffset(mid + 1 / hz);
+      const arch = Math.sin(Math.PI * z) ** 2;
+      lift = (0.06 + (0.43 * r.knee) / 145) * arch;
+      foot = 90 + 18 * arch;
     }
-    const knee = end(hip, 0.45, thigh),
-      ankle = end(knee, 0.45, thigh - bend);
-    const mix = side === role ? reach : 0;
-    const arm =
-      r.shoulder * Math.sin(p + r.arms * rad) * (1 - mix) + r.extension * mix;
+    // Keep the stance anchor exactly planted inside the reachable central interval.
+    const core = 0.65 * span,
+      margin = span - core;
+    if (Math.abs(dx) > core)
+      dx =
+        Math.sign(dx) *
+        (core + margin * Math.tanh((Math.abs(dx) - core) / margin));
+    const ankle = { x: hip.x + dx, y: lift },
+      down = hip.y - lift;
+    const bend =
+      (2 * Math.acos(clamp(Math.hypot(dx, down) / 0.9, -1, 1))) / rad;
+    const thigh = Math.atan2(dx, down) / rad + bend / 2,
+      knee = end(hip, 0.45, thigh);
+    const mix = side === role ? reach : 0,
+      arm =
+        r.shoulder * Math.sin(armPhase * rad) * (1 - mix) + r.extension * mix;
     const elbowAngle = r.elbow * (1 - mix) + 10 * mix,
       elbow = end(shoulder, 0.29, arm),
       hand = end(elbow, 0.27, arm + elbowAngle);
-    const footAngle = 85 + 14 * swing;
     return {
       knee,
       ankle,
-      toe: end(ankle, 0.19, footAngle),
+      toe: end(ankle, 0.19, foot),
       elbow,
       hand,
-      angles: [arm, elbowAngle, thigh, bend, footAngle - (thigh - bend)],
+      contact,
+      legPhase,
+      armPhase,
+      angles: [arm, elbowAngle, thigh, bend, foot - (thigh - bend)],
     };
   });
-  // Align the lowest sole with the track during stance, with a short flight phase.
-  const lift = 0.065 * Math.max(0, -Math.cos(2 * phase)),
-    dy = lift - Math.min(...limbs.flatMap((s) => [s.ankle.y, s.toe.y]));
-  for (const p of [
-    hip,
-    shoulder,
-    ...limbs.flatMap((s) => [s.knee, s.ankle, s.toe, s.elbow, s.hand]),
-  ])
-    p.y += dy;
   return {
     ...m,
     hip,
+    vy,
     shoulder,
     head: { x: shoulder.x + 0.045, y: shoulder.y + 0.2 },
     limbs,
@@ -120,12 +149,27 @@ export function pose(r: Runner, t: number, role: number, relay: boolean) {
   };
 }
 export function sample(c: Config, t: number) {
-  const [a, b] = c.runners.map((r, i) => pose(r, t, i, c.relay)),
-    tip = { x: a.hand.x + c.length, y: a.hand.y };
+  const [a, b] = [0, 1].map((i) =>
+    pose(runner(c, i), t, i, c.relay && c.baton),
+  );
+  const dx = b.hand.x - a.hand.x,
+    dy = b.hand.y - a.hand.y;
+  const near = Math.hypot(dx, dy),
+    forward = dx > 0 ? dx / Math.max(near, 1e-12) : 0;
+  const angle =
+    Math.atan2(dy, dx) *
+    smooth(forward / 0.3) *
+    smooth((c.length + 0.35 - near) / 0.2);
+  const tip = {
+    x: a.hand.x + c.length * Math.cos(angle),
+    y: a.hand.y + c.length * Math.sin(angle),
+  };
   return {
     a,
     b,
+    base: a.hand,
     tip,
+    angle,
     gap: b.x - a.x,
     relative: b.v - a.v,
     handGap: Math.hypot(tip.x - b.hand.x, tip.y - b.hand.y),
@@ -137,21 +181,28 @@ export type Event = {
   success: boolean;
   dx: number;
   dy: number;
+  angle: number;
+  grip: number;
+  approach: number;
 };
 export function analyze(c: Config) {
   let event: Event | null = null;
   const windows: number[][] = [];
-  if (!c.relay) return { event, windows };
+  if (!c.relay || !c.baton) return { event, windows };
   const start = Math.max(...c.runners.map((r) => r.start)),
     finish = Math.min(...c.runners.map((r) => r.start + r.rise + r.hold));
   const first = sample(c, 0);
-  let previous = { x: first.tip.x - first.b.hand.x, y: first.tip.y - first.b.hand.y };
+  let previous = {
+    x: first.tip.x - first.b.hand.x,
+    y: first.tip.y - first.b.hand.y,
+  };
   let inside = false;
   for (let i = 0; i <= duration * 120; i++) {
     const t = i / 120,
       s = sample(c, t),
       offset = { x: s.tip.x - s.b.hand.x, y: s.tip.y - s.b.hand.y },
-      handSpeed = Math.hypot(offset.x - previous.x, offset.y - previous.y) / frame,
+      handSpeed =
+        Math.hypot(offset.x - previous.x, offset.y - previous.y) / frame,
       ok =
         t >= start &&
         t <= finish &&
@@ -159,14 +210,23 @@ export function analyze(c: Config) {
         s.tip.x <= c.end &&
         Math.abs(s.relative) <= c.speedLimit &&
         handSpeed <= c.handSpeedLimit &&
-        s.handGap <= c.tolerance;
+        s.handGap <= c.tolerance &&
+        Math.abs(
+          (s.b.hand.x - s.base.x) * Math.sin(s.angle) -
+            (s.b.hand.y - s.base.y) * Math.cos(s.angle),
+        ) < 1e-8 &&
+        s.b.hand.x >= s.base.x &&
+        Math.hypot(s.b.hand.x - s.base.x, s.b.hand.y - s.base.y) <= c.length;
     if (ok) {
       if (!inside) windows.push([t, t]);
       windows[windows.length - 1][1] = t;
       event ??= {
         t,
-        x: s.tip.x,
+        x: s.b.hand.x,
         success: true,
+        angle: s.angle,
+        grip: Math.hypot(s.b.hand.x - s.base.x, s.b.hand.y - s.base.y),
+        approach: handSpeed,
         dx: s.tip.x - s.b.hand.x,
         dy: s.tip.y - s.b.hand.y,
       };
@@ -181,20 +241,45 @@ export function analyze(c: Config) {
     c.runners.every((r) => r.start <= duration)
   ) {
     const t = Math.max(0, finish);
-    event = { t, x: sample(c, t).tip.x, success: false, dx: 0, dy: 0 };
+    event = {
+      t,
+      x: sample(c, t).tip.x,
+      success: false,
+      angle: 0,
+      grip: 0,
+      approach: 0,
+      dx: 0,
+      dy: 0,
+    };
   }
   return { event, windows };
 }
 export function state(c: Config, t: number, event: Event | null) {
   const s = sample(c, t),
     passed = !!event && event.success && t >= event.t;
-  const tip =
-    passed && event
-      ? { x: s.b.hand.x + event.dx, y: s.b.hand.y + event.dy }
-      : s.tip;
+  let { base, tip, angle } = s;
+  if (passed && event) {
+    const blend = smooth((t - event.t) / 0.24);
+    angle =
+      event.angle * (1 - blend) +
+      blend * 0.32 * Math.sin(s.b.limbs[1].angles[0] * rad);
+    const grip = event.grip * (1 - blend) + 0.08 * c.length * blend;
+    if (t !== event.t) {
+      base = {
+        x: s.b.hand.x - grip * Math.cos(angle),
+        y: s.b.hand.y - grip * Math.sin(angle),
+      };
+      tip = {
+        x: base.x + c.length * Math.cos(angle),
+        y: base.y + c.length * Math.sin(angle),
+      };
+    }
+  }
   return {
     ...s,
+    base,
     tip,
+    angle,
     handGap: Math.hypot(tip.x - s.b.hand.x, tip.y - s.b.hand.y),
     owner: passed ? "B" : "A",
     status: !event || t < event.t ? "未成立" : passed ? "成功" : "失敗",
@@ -215,4 +300,3 @@ export function advance(
     ? lo + ((((n - lo) % (hi - lo)) + (hi - lo)) % (hi - lo))
     : clamp(n, lo, hi);
 }
-

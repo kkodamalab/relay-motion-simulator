@@ -203,3 +203,27 @@ p {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+[hidden] {
+  display: none !important;
+}
+.settings {
+  display: block;
+}
+#settingsTabs,
+#analysisTabs {
+  gap: 5px;
+  margin: 8px 0;
+}
+#trails {
+  margin: 8px 0;
+}
+#stats {
+  line-height: 1.8;
+}
+#phaseControls {
+  margin-top: 10px;
+}
+#coordinates:empty {
+  display: none;
+}
