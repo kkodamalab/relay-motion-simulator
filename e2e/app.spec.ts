@@ -59,8 +59,8 @@ test("seek, export and manual loop without an exchange", async ({ page }) => {
   await page.locator("#reset").click();
   await page.locator("#timeline").focus();
   await page.keyboard.press("End");
-  await expect(page.locator("#clock")).toContainText("6.000");
-  await expect(page.locator("#stats")).toContainText("48.00 m");
+  await expect(page.locator("#clock")).toContainText("10.000");
+  await expect(page.locator("#stats")).toContainText("0.00 m/s");
   await expect(page.locator("#result")).toContainText("保持 B");
 });
 
@@ -110,10 +110,77 @@ test("research plots, screenshots and identical CSV/JSON samples", async ({
   const json = JSON.parse(await read("json")),
     csv = (await read("csv")).trim().split(/\r?\n/),
     keys = csv[0].replace(/^\uFEFF/, "").split(",");
-  expect(csv.length).toBe(723 - 1);
+  expect(csv.length).toBe(1203 - 1);
   for (const n of [0, 120, 720]) {
     const fields = csv[n + 1].split(",");
     keys.forEach((k, i) => expect(fields[i]).toBe(String(json.samples[n][k])));
   }
   expect(keys).not.toContain("owner");
+});
+
+test("deceleration controls, slow playback, grounded stop and variable duration", async ({
+  page,
+}, info) => {
+  await page.goto("./");
+  await expect(page.locator("#clock")).toContainText("10.000 s");
+  await page
+    .getByRole("button", { name: "BATON EXCHANGE", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("渡し手の減速・停止", { exact: true }),
+  ).toBeChecked();
+  const seek = async (t: number) =>
+    page.locator("#timeline").evaluate((el: HTMLInputElement, t) => {
+      el.value = String(t);
+      el.dispatchEvent(new Event("input"));
+    }, t);
+  const text = await page.locator("#brakeStats").innerText();
+  const start = Number(text.match(/減速開始 ([\d.]+)/)![1]);
+  const stop = Number(text.match(/停止 ([\d.]+)/)![1]);
+  await seek(start + 0.5);
+  await page.getByRole("button", { name: "0.1×", exact: true }).click();
+  await page.locator("#play").click();
+  await page.waitForTimeout(1000);
+  await page.locator("#play").click();
+  const time = parseFloat(await page.locator("#clock").innerText());
+  expect(time).toBeGreaterThan(start + 0.55);
+  expect(time).toBeLessThan(start + 0.8);
+  await page
+    .locator(".stage")
+    .screenshot({ path: info.outputPath("decelerating-0.1x.png") });
+  await seek(stop + 0.1);
+  await expect(page.locator("#stats")).toContainText("0.00 m/s");
+  await expect(page.locator("#stats")).toContainText("7.00 m/s");
+  await page.locator("#coords").check();
+  const stationary = (await page.locator("#coordinates").innerText()).split(
+    "B ",
+  )[0];
+  await seek(10);
+  expect((await page.locator("#coordinates").innerText()).split("B ")[0]).toBe(
+    stationary,
+  );
+  await page.getByRole("button", { name: "−1 frame", exact: true }).click();
+  expect((await page.locator("#coordinates").innerText()).split("B ")[0]).toBe(
+    stationary,
+  );
+  await page
+    .locator(".stage")
+    .screenshot({ path: info.outputPath("stopped.png") });
+  await page.getByLabel("シミュレーション時間 s", { exact: true }).fill("3");
+  await expect(page.locator("#timeline")).toHaveAttribute("max", "3");
+  await expect(page.locator("#brakeStats")).toContainText("試技時間外");
+  await page.getByLabel("シミュレーション時間 s", { exact: true }).fill("20");
+  await seek(20);
+  await expect(page.locator("#clock")).toContainText("20.000 / 20.000");
+  await page.getByLabel("渡し手の減速・停止", { exact: true }).uncheck();
+  await expect(page.locator("#stats")).toContainText("8.00 m/s");
+  await page.getByLabel("渡し手の減速・停止", { exact: true }).check();
+  await page.getByLabel("ゾーン開始 m", { exact: true }).fill("90");
+  await expect(page.locator("#brakeStats")).toContainText("減速開始 なし");
+  await page.getByLabel("パス失敗時の動作", { exact: true }).selectOption("1");
+  await expect(page.locator("#brakeStats")).toContainText("減速開始 4.000");
+  await page
+    .getByLabel("パス前から減速（絶対時刻を使用）", { exact: true })
+    .check();
+  await expect(page.locator("#brakeStats")).toContainText("減速開始 1.000");
 });

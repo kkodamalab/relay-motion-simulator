@@ -61,7 +61,7 @@
           max="6"
           step="any"
           value="0"
-        /><i id="marker"></i>
+        /><i id="marker"></i><i id="brakeMarker"></i><i id="stopMarker"></i>
       </div>
       <div class="bar">
         <b>再生速度</b><output id="rate"></output
@@ -76,10 +76,12 @@
         />
         <div id="presets"></div>
       </div>
+      <div id="trialSettings"></div>
       <div class="bar" id="steps"></div>
       <div class="bar" id="jumps"></div>
     </section>
     <p id="result"></p>
+    <p id="brakeStats" aria-live="polite"></p>
     <nav id="settingsTabs"></nav>
     <div class="settings">
       <section>
@@ -109,7 +111,7 @@
     </section>
     <footer>
       2D運動学モデル ·
-      速度と四肢周期は独立。パス成功は幾何学的な成立を示します。接触力・把持力・落下は予測しません。
+      速度と四肢周期の連動は切り替え可能。パス成功は幾何学的な成立を示します。接触力・把持力・落下は予測しません。
     </footer>
   </main>
   <script type="module" src="./main.ts"></script>

@@ -37,7 +37,7 @@ test("failed, pending and solo", () => {
   const e = analyze(c).event;
   expect(state(c, 0, e).status).toBe("未成立");
   expect(state(c, 6, e).status).toBe("失敗");
-  c.runners[0].start = 8;
+  c.runners[0].start = c.duration + 2;
   expect(analyze(c).event).toBeNull();
   c.relay = false;
   expect(analyze(c).event).toBeNull();
@@ -168,4 +168,140 @@ test("exported phase and hand position agree with direct evaluation after seekin
   expect(rows[240].A_left_hand_x_m).toBe(s.a.hand.x);
   expect(rows[240]["A_左腕_estimated_deg"]).toBe(o.estimated[2]);
   expect(rows[240].owner).toBe("B");
+});
+
+import { braking, brakingMotion, brakeStart, configuredPose } from "./model";
+test("braking integrates speed with continuous boundaries and a stable grounded stop", () => {
+  const c = defaults(),
+    e = analyze(c).event!,
+    b = braking(c, e);
+  expect(b.start).toBe(e.t);
+  expect(b.stop).toBeCloseTo(e.t + 8 / 3);
+  expect(b.distance).toBeCloseTo(64 / 6);
+  for (const time of [b.start!, b.stop!]) {
+    const left = state(c, time - 1e-7, e).a,
+      right = state(c, time + 1e-7, e).a;
+    expect(Math.abs(right.x - left.x)).toBeLessThan(2e-6);
+    expect(Math.abs(right.v - left.v)).toBeLessThan(1e-6);
+    for (let i = 0; i < points(left).length; i++)
+      expect(
+        Math.hypot(
+          points(left)[i].x - points(right)[i].x,
+          points(left)[i].y - points(right)[i].y,
+        ),
+      ).toBeLessThan(1e-5);
+  }
+  const stopped = state(c, b.stop! + 0.1, e).a;
+  expect(stopped.v).toBe(0);
+  expect(stopped.pitch).toBe(0);
+  expect(state(c, 10, e).a).toEqual(stopped);
+  for (const l of stopped.limbs) {
+    expect(l.ankle.y).toBe(0);
+    expect(l.contact).toBe(true);
+  }
+  expect(state(c, 10, e).b.v).toBe(7);
+  for (let t = 0; t <= 20; t += 0.03)
+    expect(state(c, t, e).a.v).toBeGreaterThanOrEqual(0);
+  const h = 1e-5,
+    t = e.t + 0.5;
+  expect(
+    (state(c, t + h, e).a.x - state(c, t - h, e).a.x) / (2 * h),
+  ).toBeCloseTo(state(c, t, e).a.v, 6);
+  expect(
+    (state(c, t + h, e).a.hip.y - state(c, t - h, e).a.hip.y) / (2 * h),
+  ).toBeCloseTo(state(c, t, e).a.vy, 6);
+});
+test("success delay never changes the prior event; pre-braking participates without feedback", () => {
+  const c = defaults(),
+    e = analyze(c).event!;
+  c.delay = 1.5;
+  c.deceleration = 8;
+  expect(analyze(c).event).toEqual(e);
+  expect(braking(c, e).start).toBe(e.t + 1.5);
+  c.preDecelerate = true;
+  c.preStart = 0;
+  expect(brakeStart(c, e)).toBe(0);
+  expect(analyze(c).event?.success).toBe(false);
+  expect(configuredPose(c, 1, 0).v).toBe(0);
+  c.preDecelerate = false;
+  c.delay = 0;
+  c.runners[1].x += 0.2;
+  const changed = analyze(c).event!;
+  expect(changed.success).toBe(true);
+  expect(changed.t).not.toBe(e.t);
+  expect(braking(c, changed).start).toBe(changed.t);
+});
+test("failure, baton-off, disabled and independent gait options", () => {
+  const c = defaults();
+  c.zone = 90;
+  let e = analyze(c).event;
+  expect(braking(c, e).start).toBeNull();
+  c.failureStop = true;
+  expect(braking(c, e).start).toBe(4);
+  expect(state(c, 10, e).a.v).toBe(0);
+  c.baton = false;
+  e = analyze(c).event;
+  expect(braking(c, e).start).toBeNull();
+  c.freeStop = true;
+  c.speedLinked = false;
+  const s = state(c, 10, e).a;
+  expect(s.v).toBe(0);
+  expect(s.pitch).toBe(c.runners[0].pitch);
+  expect(s.limbs.every((l) => l.ankle.y === 0)).toBe(true);
+  c.decelerate = false;
+  expect(state(c, 10, e).a).toEqual(pose(c.runners[0], 10, 0, false));
+});
+test("seek and playback rates reconstruct braking identically, including reverse frames", () => {
+  const c = defaults(),
+    e = analyze(c).event!;
+  for (const t of [e.t, e.t + 0.5, braking(c, e).stop!, 10]) {
+    const expected = state(c, t, e);
+    for (const rate of [0.1, 3])
+      expect(
+        state(c, advance(0, t / rate, rate, true, 0, 20, false), e).a.x,
+      ).toBeCloseTo(expected.a.x, 10);
+    state(c, 10, e);
+    expect(state(c, t, e)).toEqual(expected);
+    expect(
+      state(c, advance(t + frame, -frame, 1, true, 0, 20, false), e).a.x,
+    ).toBeCloseTo(expected.a.x, 10);
+  }
+});
+
+test("post-pass braking leaves all earlier poses and B's synchronized oscillator unchanged", () => {
+  const c = defaults();
+  c.sync = c.lock = true;
+  const e = analyze(c).event!;
+  for (const t of [0, e.t - 0.01, e.t]) {
+    const s = state(c, t, e);
+    c.decelerate = false;
+    expect(state(c, t, e).a).toEqual(s.a);
+    c.decelerate = true;
+  }
+  for (const t of [e.t + 0.5, 10]) {
+    const b = state(c, t, e).b;
+    c.decelerate = false;
+    expect(state(c, t, e).b).toEqual(b);
+    c.decelerate = true;
+  }
+});
+test("gait phase derivative follows displayed pitch and braking supports accelerated approach", () => {
+  const c = defaults(),
+    e = analyze(c).event!,
+    t = e.t + 0.3,
+    h = 1e-6;
+  const left = state(c, t - h, e).a,
+    right = state(c, t + h, e).a;
+  expect(
+    delta(left.limbs[0].legPhase, right.limbs[0].legPhase) / (2 * h) / 180,
+  ).toBeCloseTo(state(c, t, e).a.pitch, 6);
+  const r = c.runners[0];
+  Object.assign(r, { accelerated: true, a: 2, v: 2, cap: 5 });
+  for (const start of [0.5, 3]) {
+    expect(brakingMotion(r, start, start, 8)).toEqual(motion(r, start));
+    expect(brakingMotion(r, start + 0.1, start, 8).v).toBeCloseTo(
+      motion(r, start).v - 0.8,
+    );
+    expect(brakingMotion(r, 20, start, 0.5).v).toBe(0);
+  }
 });

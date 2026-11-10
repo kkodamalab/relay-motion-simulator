@@ -3,7 +3,10 @@ const remote = process.env.TEST_URL;
 export default defineConfig({
   testDir: "./e2e",
   workers: 1,
-  use: { baseURL: remote || "http://127.0.0.1:4173/relay-motion-simulator/" },
+  use: {
+    launchOptions: { executablePath: process.env.CHROMIUM_PATH },
+    baseURL: remote || "http://127.0.0.1:4173/relay-motion-simulator/",
+  },
   webServer: remote
     ? undefined
     : {
