@@ -305,3 +305,94 @@ test("gait phase derivative follows displayed pitch and braking supports acceler
     expect(brakingMotion(r, 20, start, 0.5).v).toBe(0);
   }
 });
+
+test("receiver recovery overrides hold without resetting phase or changing other limbs", () => {
+  const c = defaults(),
+    event = analyze(c).event!;
+  const baselineEvent = JSON.stringify(event);
+  for (const seconds of [0.05, 0.2, 1]) {
+    c.armRecoveryTime = seconds;
+    expect(JSON.stringify(analyze(c).event)).toBe(baselineEvent);
+    for (const elapsed of [
+      -0.01,
+      0,
+      0.0001,
+      seconds / 2,
+      seconds,
+      seconds + 0.1,
+    ]) {
+      const t = event.t + elapsed,
+        s = state(c, t, event);
+      const receiving = pose(runner(c, 1), t, 1, true);
+      const normal = pose(runner(c, 1), t, 1, false);
+      expect(s.b.limbs[0]).toEqual(receiving.limbs[0]);
+      expect(s.b.limbs[1].angles.slice(2)).toEqual(
+        receiving.limbs[1].angles.slice(2),
+      );
+      expect(s.b.hip).toEqual(receiving.hip);
+      expect(s.b.limbs[1].armPhase).toBe(normal.limbs[1].armPhase);
+      expect(configuredPose(c, t, 1, event)).toEqual(s.b);
+      if (elapsed <= 0) expect(s.b).toEqual(receiving);
+      else if (elapsed >= seconds - 1e-12) {
+        expect(s.b.limbs[1].angles[0]).toBeCloseTo(
+          normal.limbs[1].angles[0],
+          10,
+        );
+        expect(s.b.limbs[1].angles[1]).toBeCloseTo(
+          normal.limbs[1].angles[1],
+          10,
+        );
+      } else
+        expect(s.b.limbs[1].angles[0]).not.toBe(receiving.limbs[1].angles[0]);
+      const unchanged = structuredClone(c);
+      unchanged.armRecoveryTime = 0.2;
+      expect(s.a).toEqual(state(unchanged, t, event).a);
+    }
+    for (const boundary of [event.t, event.t + seconds]) {
+      const h = 1e-6,
+        a = state(c, boundary - h, event).b.limbs[1],
+        b = state(c, boundary, event).b.limbs[1],
+        d = state(c, boundary + h, event).b.limbs[1];
+      for (const k of [0, 1]) {
+        expect(Math.abs(d.angles[k] - a.angles[k])).toBeLessThan(0.02);
+        expect(
+          Math.abs(
+            (d.angles[k] - b.angles[k]) / h - (b.angles[k] - a.angles[k]) / h,
+          ),
+        ).toBeLessThan(1);
+      }
+    }
+  }
+});
+test("recovered arm, baton and exported angles agree for rates and arbitrary seeks", () => {
+  const c = defaults();
+  c.runners[1].armLock = false;
+  c.runners[1].armHz = 1.3;
+  const event = analyze(c).event!;
+  expect(event.success).toBe(true);
+  const rows = exportRows(c, event);
+  for (
+    let n = Math.ceil(event.t * 120);
+    n < Math.ceil((event.t + 1) * 120);
+    n++
+  ) {
+    const t = n / 120,
+      s = state(c, t, event),
+      hand = s.b.hand,
+      v = { x: s.tip.x - s.base.x, y: s.tip.y - s.base.y };
+    expect(Math.hypot(v.x, v.y)).toBeCloseTo(c.length, 10);
+    expect((hand.x - s.base.x) * v.y - (hand.y - s.base.y) * v.x).toBeCloseTo(
+      0,
+      9,
+    );
+    expect(s.tip.x).toBeGreaterThanOrEqual(hand.x);
+    expect(rows[n].B_right_shoulder_deg).toBeCloseTo(s.b.limbs[1].angles[0], 9);
+    for (const rate of [0.1, 3])
+      expect(
+        state(c, advance(0, t / rate, rate, true, 0, 10, false), event).b.hand
+          .x,
+      ).toBeCloseTo(hand.x, 10);
+    state(c, 10, event);
+    expect(state(c, t, event)).toEqual(s);
+  }
+});
