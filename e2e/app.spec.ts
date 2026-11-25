@@ -184,3 +184,64 @@ test("deceleration controls, slow playback, grounded stop and variable duration"
     .check();
   await expect(page.locator("#brakeStats")).toContainText("減速開始 1.000");
 });
+
+test("receiver resumes arm swing at 0.1x and recovery time survives export", async ({
+  page,
+}, info) => {
+  await page.goto("./");
+  await page
+    .getByRole("button", { name: "BATON EXCHANGE", exact: true })
+    .click();
+  await page.getByText("Runner B · 後方伸展", { exact: true }).click();
+  const recovery = page.getByLabel("腕振り復帰時間 / Arm Recovery Time s", {
+    exact: true,
+  });
+  await expect(recovery).toHaveValue("0.2");
+  await expect(recovery).toHaveAttribute("min", "0.05");
+  await expect(recovery).toHaveAttribute("max", "1");
+  await expect(recovery).toHaveAttribute("step", "0.05");
+  await page.getByRole("button", { name: "イベント時刻", exact: true }).click();
+  const eventTime = parseFloat(await page.locator("#clock").innerText());
+  await page.locator("#coords").check();
+  const before = await page.locator("#coordinates").innerText();
+  await page.getByRole("button", { name: "0.1×", exact: true }).click();
+  await page.locator("#play").click();
+  await page.waitForTimeout(1200);
+  await page.locator("#play").click();
+  expect(parseFloat(await page.locator("#clock").innerText())).toBeGreaterThan(
+    eventTime + 0.07,
+  );
+  await expect(page.locator("#coordinates")).not.toHaveText(before);
+  const seek = async (t: number) =>
+    page.locator("#timeline").evaluate((el: HTMLInputElement, v) => {
+      el.value = String(v);
+      el.dispatchEvent(new Event("input"));
+    }, t);
+  for (const [label, offset] of [
+    ["start", 0],
+    ["recovering", 0.1],
+    ["normal", 0.2],
+    ["swing", 0.4],
+  ] as const) {
+    await seek(eventTime + offset);
+    await page
+      .locator(".stage")
+      .screenshot({ path: info.outputPath("recovery-" + label + ".png") });
+  }
+  await recovery.fill("0.5");
+  const ready = page.waitForEvent("download");
+  await page.locator("#json").click();
+  const stream = await (await ready).createReadStream(),
+    parts = [];
+  for await (const part of stream!) parts.push(part);
+  const data = JSON.parse(Buffer.concat(parts).toString("utf8"));
+  expect(data.config.armRecoveryTime).toBe(0.5);
+  const row = data.samples[Math.round((eventTime + 0.5) * 120)];
+  expect(row.B_right_elbow_deg).toBe(data.config.runners[1].elbow);
+  await page.locator("#reset").click();
+  await page
+    .getByRole("button", { name: "BATON EXCHANGE", exact: true })
+    .click();
+  await page.getByText("Runner B · 後方伸展", { exact: true }).click();
+  await expect(recovery).toHaveValue("0.2");
+});

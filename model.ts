@@ -49,6 +49,7 @@ export function defaults() {
     speedLimit: 2,
     handSpeedLimit: 3,
     length: 0.3,
+    armRecoveryTime: 0.2,
   };
 }
 export type Config = ReturnType<typeof defaults>;
@@ -141,6 +142,8 @@ export function pose(
   start: number | null = null,
   deceleration = 3,
   linked = true,
+  recoveryStart: number | null = null,
+  recoveryTime = 0.2,
 ) {
   const m = brakingMotion(r, t, start, deceleration),
     initial = start === null ? null : motion(r, start),
@@ -173,9 +176,14 @@ export function pose(
         (linked ? ratio : 1) *
         Math.sin(vertical);
   const shoulder = { x: m.x + 0.09 * weight, y: hip.y + 0.5 };
+  const recovery =
+    recoveryStart === null
+      ? 1
+      : 1 - smooth((t - recoveryStart) / clamp(recoveryTime, 0.05, 1));
   const reach = exchange
     ? smooth((t - r.start) / r.rise) *
-      (1 - smooth((t - r.start - r.rise - r.hold) / r.rise))
+      (1 - smooth((t - r.start - r.rise - r.hold) / r.rise)) *
+      recovery
     : 0;
   const limbs = [0, 1].map((side) => {
     const legPhase = wrap(phase + side * r.legs),
@@ -260,12 +268,15 @@ export function configuredPose(
     i === 0 ? brakeStart(c, event) : null,
     c.deceleration,
     c.speedLinked,
+    i === 1 && event?.success ? event.t : null,
+    c.armRecoveryTime ?? 0.2,
   );
 }
 export function sample(
   c: Config,
   t: number,
   start: number | null = brakeStart(c, null, true),
+  event: Event | null = null,
 ) {
   const [a, b] = [0, 1].map((i) =>
     pose(
@@ -276,6 +287,8 @@ export function sample(
       i === 0 ? start : null,
       c.deceleration,
       c.speedLinked,
+      i === 1 && event?.success ? event.t : null,
+      c.armRecoveryTime ?? 0.2,
     ),
   );
   const dx = b.hand.x - a.hand.x,
@@ -391,7 +404,7 @@ function analyzeRaw(c: Config) {
   return { event, windows };
 }
 export function state(c: Config, t: number, event: Event | null) {
-  const s = sample(c, t, brakeStart(c, event)),
+  const s = sample(c, t, brakeStart(c, event), event),
     passed = !!event && event.success && t >= event.t;
   let { base, tip, angle } = s;
   if (passed && event) {

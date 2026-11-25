@@ -210,6 +210,16 @@ function settings() {
         "伸展</summary>";
       ex.append(d);
       fields(d, r, reach);
+      if (i === 1)
+        fields(d, c, [
+          [
+            "armRecoveryTime",
+            "腕振り復帰時間 / Arm Recovery Time s",
+            0.05,
+            1,
+            0.05,
+          ],
+        ]);
     });
   }
   for (const [id, active] of [
